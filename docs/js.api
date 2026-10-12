@@ -1,0 +1,20 @@
+// api.js — Cliente da API REST
+async function request(path, options = {}) {
+  const res = await fetch(path, {
+    headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+    ...options,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Erro ${res.status}`);
+  return data;
+}
+
+const api = {
+  templates: () => request('/api/templates'),
+  listVideos: (params = {}) => request(`/api/videos/list?${new URLSearchParams(params)}`),
+  createVideo: (payload) => request('/api/videos/create', { method: 'POST', body: payload }),
+  getVideo: (id) => request(`/api/videos/${id}`),
+  deleteVideo: (id) => request(`/api/videos/${id}`, { method: 'DELETE' }),
+  jobStatus: (jobId) => request(`/api/status/${jobId}`),
+};
