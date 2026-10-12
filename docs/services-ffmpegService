@@ -1,0 +1,186 @@
+'use strict';
+/**
+ * ffmpegService.js — Toda a integração com FFmpeg fica aqui.
+ *
+ * Fluxo de um vídeo:
+ *   1. Para cada cena: gera um fundo em gradiente (PNG), aplica zoom/pan,
+ *      escreve o texto com fade, e junta com o áudio (narração ou silêncio).
+ *   2. Concatena todos os clipes em um MP4 final (faststart).
+ */
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const config = require('../config');
+const logger = require('../logger');
+
+const BASE_ARGS = ['-y', '-hide_banner', '-loglevel', 'error', '-progress', 'pipe:1', '-nostats'];
+
+/** Executa um binário e acompanha o progresso (out_time_us do -progress). */
+function run(bin, args, { cwd, onProgress, durationSec } = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    let buffer = '';
+
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL');
+      reject(new Error('Tempo limite de renderização excedido'));
+    }, config.RENDER_TIMEOUT_MS);
+
+    proc.stdout.on('data', (chunk) => {
+      buffer += chunk;
+      let idx;
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (onProgress && durationSec && line.startsWith('out_time_us=')) {
+          const us = parseInt(line.slice(12), 10);
+          if (Number.isFinite(us)) onProgress(Math.max(0, Math.min(1, us / 1e6 / durationSec)));
+        }
+      }
+    });
+    proc.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
+    proc.on('error', (err) => { clearTimeout(timer); reject(new Error(`Não foi possível executar ${bin}: ${err.message}`)); });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) return resolve();
+      reject(new Error(`${bin} falhou (código ${code}): ${stderr.trim().split('\n').slice(-6).join(' | ')}`));
+    });
+  });
+}
+
+/** Verifica se FFmpeg/FFprobe existem (chamado na inicialização). */
+async function checkFfmpeg() {
+  try {
+    await run(config.FFMPEG_PATH, ['-hide_banner', '-loglevel', 'error', '-version']);
+    await run(config.FFPROBE_PATH, ['-hide_banner', '-loglevel', 'error', '-version']);
+    if (!config.FONT_FILE) logger.warn('Nenhuma fonte TTF encontrada; defina FONT_FILE no .env se o texto não aparecer.');
+    return true;
+  } catch (err) {
+    logger.error('FFmpeg não encontrado. Instale com: sudo apt install ffmpeg (Linux) ou brew install ffmpeg (macOS).');
+    return false;
+  }
+}
+
+/** Duração (segundos) de um arquivo de mídia. */
+function probeDuration(file) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(config.FFPROBE_PATH, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file]);
+    let out = '';
+    proc.stdout.on('data', (d) => { out += d; });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      const n = parseFloat(out);
+      if (code === 0 && Number.isFinite(n)) resolve(n);
+      else reject(new Error(`ffprobe não conseguiu ler a duração de ${path.basename(file)}`));
+    });
+  });
+}
+
+/** Quebra o texto em linhas de no máximo maxChars caracteres. */
+function wrapText(text, maxChars) {
+  const words = String(text).replace(/[\u0000-\u001f]+/g, ' ').trim().split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    if (line && (line + ' ' + w).length > maxChars) { lines.push(line); line = w; }
+    else line = line ? `${line} ${w}` : w;
+  }
+  if (line) lines.push(line);
+  return lines.join('\n');
+}
+
+const hex = (c) => '0x' + String(c).replace('#', '');
+const escFilterPath = (p) => p.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+
+/** Expressões do zoompan para cada efeito (N = total de frames da cena). */
+function effectExpr(effect, N) {
+  const center = { x: "'iw/2-(iw/zoom/2)'", y: "'ih/2-(ih/zoom/2)'" };
+  switch (effect) {
+    case 'zoom_out': return { z: `'1.14-0.14*on/${N}'`, ...center };
+    case 'pan_left': return { z: "'1.14'", x: `'(iw-iw/zoom)*(1-on/${N})'`, y: center.y };
+    case 'pan_right': return { z: "'1.14'", x: `'(iw-iw/zoom)*on/${N}'`, y: center.y };
+    case 'zoom_in':
+    default: return { z: `'1+0.14*on/${N}'`, ...center };
+  }
+}
+
+/**
+ * Renderiza UMA cena em clip MP4 (com áudio).
+ * @param {object} o
+ *   dir        pasta temporária do job (cwd do ffmpeg)
+ *   index      número da cena
+ *   caption    texto na tela
+ *   title      título pequeno no topo
+ *   duration   duração em segundos
+ *   width,height
+ *   template   config do template
+ *   audioFile  nome do arquivo de áudio dentro de dir (ou null = silêncio)
+ *   onProgress fração 0..1
+ */
+async function renderClip(o) {
+  const { dir, index, caption, title, duration, width: W, height: H, template, audioFile, onProgress } = o;
+  const FPS = config.FPS;
+  const N = Math.max(1, Math.round(duration * FPS));
+  const fs_ = Math.round(Math.min(W, H) * 0.058);       // tamanho da fonte
+  const maxChars = Math.max(10, Math.floor((W * 0.82) / (fs_ * 0.58)));
+
+  fs.writeFileSync(path.join(dir, `caption_${index}.txt`), wrapText(caption, maxChars), 'utf8');
+  fs.writeFileSync(path.join(dir, `title_${index}.txt`), String(title).slice(0, 48).toUpperCase(), 'utf8');
+
+  // 1) Fundo em gradiente — direção varia por cena para dar movimento ao conjunto
+  const corners = [[0, 0, W, H], [W, 0, 0, H], [0, H, W, 0], [W, H, 0, 0]][index % 4];
+  const bg = `bg_${index}.png`;
+  const [c0, c1] = template.colors;
+  await run(config.FFMPEG_PATH, [
+    ...BASE_ARGS, '-f', 'lavfi',
+    '-i', `gradients=s=${W}x${H}:c0=${hex(c0)}:c1=${hex(c1)}:x0=${corners[0]}:y0=${corners[1]}:x1=${corners[2]}:y1=${corners[3]}:d=1:n=2`,
+    '-frames:v', '1', bg,
+  ], { cwd: dir });
+
+  // 2) Clipe: zoom/pan + texto + fade + áudio
+  const k = Math.max(W, H) <= 1920 ? 2 : 1; // supersampling suaviza o zoompan
+  const ex = effectExpr(template.effect, N);
+  const font = config.FONT_FILE ? `fontfile='${escFilterPath(config.FONT_FILE)}':` : '';
+  const yCaption = template.textPosition === 'lower' ? 'h-text_h-h*0.14' : '(h-text_h)/2';
+  const fade = 0.35;
+
+  const vf = [
+    `[0:v]scale=${W * k}:${H * k}`,
+    `zoompan=z=${ex.z}:x=${ex.x}:y=${ex.y}:d=${N}:s=${W}x${H}:fps=${FPS}`,
+    `drawtext=${font}textfile='title_${index}.txt':expansion=none:fontsize=${Math.round(fs_ * 0.5)}:fontcolor=${hex(template.accent)}:x=(w-text_w)/2:y=h*0.07`,
+    `drawtext=${font}textfile='caption_${index}.txt':expansion=none:fontsize=${fs_}:fontcolor=white:line_spacing=${Math.round(fs_ * 0.25)}:x=(w-text_w)/2:y=${yCaption}:box=1:boxcolor=black@0.38:boxborderw=${Math.round(fs_ * 0.4)}:alpha='if(lt(t,0.4),t/0.4,1)'`,
+    `fade=t=in:st=0:d=${fade}`,
+    `fade=t=out:st=${Math.max(0, duration - fade).toFixed(3)}:d=${fade}`,
+    'format=yuv420p[v]',
+  ].join(',');
+  const af = `[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,afade=t=out:st=${Math.max(0, duration - 0.3).toFixed(3)}:d=0.3[a]`;
+
+  const audioInput = audioFile ? ['-i', audioFile] : ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo'];
+  const out = `clip_${index}.mp4`;
+
+  await run(config.FFMPEG_PATH, [
+    ...BASE_ARGS,
+    '-i', bg, ...audioInput,
+    '-filter_complex', `${vf};${af}`,
+    '-map', '[v]', '-map', '[a]',
+    '-t', duration.toFixed(3), '-r', String(FPS),
+    '-c:v', 'libx264', '-preset', config.X264_PRESET, '-crf', String(config.X264_CRF),
+    '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2',
+    out,
+  ], { cwd: dir, onProgress, durationSec: duration });
+
+  return path.join(dir, out);
+}
+
+/** Junta os clipes (mesmos parâmetros) em um MP4 final sem recodificar. */
+async function concatClips(dir, clipFiles, outputFile) {
+  const list = clipFiles.map((f) => `file '${path.basename(f)}'`).join('\n');
+  fs.writeFileSync(path.join(dir, 'list.txt'), list, 'utf8');
+  await run(config.FFMPEG_PATH, [
+    ...BASE_ARGS, '-f', 'concat', '-safe', '0', '-i', 'list.txt',
+    '-c', 'copy', '-movflags', '+faststart', outputFile,
+  ], { cwd: dir });
+}
+
+module.exports = { checkFfmpeg, probeDuration, renderClip, concatClips };
