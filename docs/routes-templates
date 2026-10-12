@@ -1,0 +1,9 @@
+'use strict';
+/** routes/templates.js — Rota /api/templates */
+const express = require('express');
+const controller = require('../controllers/templateController');
+
+const router = express.Router();
+router.get('/', controller.list);
+
+module.exports = router;
