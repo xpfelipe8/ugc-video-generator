@@ -1,0 +1,75 @@
+🎬 UGC VIDEO GENERATOR - GUIA RÁPIDO
+=====================================
+
+SE VOCÊ NÃO ENTENDE NADA DE PROGRAMAÇÃO, SIGA ISTO:
+
+✅ PASSO 1: ABRIR CLAUDE
+- Vá para: https://claude.ai
+- Faça login com sua conta
+
+✅ PASSO 2: COPIAR PROMPT
+- Abra o arquivo: PROMPT_PARA_CLAUDE.md
+- Copie TODO o texto que está entre:
+  === COMEÇO DO PROMPT ===
+  === FIM DO PROMPT ===
+
+✅ PASSO 3: COLAR NO CLAUDE
+- Cola o prompt na caixa de chat
+- Clique em enviar
+- Espere o Claude responder
+
+✅ PASSO 4: COPIAR CÓDIGO
+- Claude vai gerar um arquivo
+- Copie o código (o texto que está em um bloco cinzento)
+- Cole em um arquivo no seu computador
+
+✅ PASSO 5: REPETIR
+- Diga "próximo" para Claude
+- Ele gera o próximo arquivo
+- Repita o passo 4
+- Continue até Claude terminar
+
+✅ PASSO 6: INSTALAR
+- Abra o Terminal (Ctrl+Alt+T no Linux, Cmd+Space no Mac)
+- Digite: npm install
+- Espera terminar
+
+✅ PASSO 7: RODAR
+- No terminal: npm start
+- Abra: http://localhost:5000
+- Pronto! Está rodando!
+
+=====================================
+DÚVIDAS?
+=====================================
+
+P: Não consegui instalar Node.js
+R: Vá em https://nodejs.org e baixe a versão LTS
+   Execute o instalador e siga os passos
+
+P: Não aparece nada no localhost:5000
+R: Abra o terminal e veja se há alguma mensagem de erro
+   Cole a mensagem de erro no Claude
+
+P: Diz que FFmpeg não foi encontrado
+R: No terminal, digite: sudo apt-get install ffmpeg
+   (Linux) ou use Homebrew no Mac
+
+P: Quer gerar um vídeo?
+R: Preencha o formulário e clique em "Gerar"
+   O Claude vai processar e criar o vídeo
+
+=====================================
+PROXIMOS PASSOS
+=====================================
+
+1. Execute os 7 passos acima
+2. Quando tiver tudo rodando, vá para o Claude
+3. Diga: "Quero gerar um vídeo de [tema]"
+4. Forneça os detalhes
+5. Claude vai criar o vídeo para você
+6. Baixe e use!
+
+=====================================
+É ISSO! BOA SORTE! 🚀
+=====================================
