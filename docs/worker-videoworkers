@@ -1,0 +1,65 @@
+'use strict';
+/**
+ * videoWorker.js — Fila de jobs com processamento paralelo.
+ * A fila vive no SQLite: se o servidor reiniciar, jobs pendentes continuam.
+ * MAX_CONCURRENT_JOBS define quantos vídeos são renderizados ao mesmo tempo.
+ */
+const config = require('../config');
+const logger = require('../logger');
+const videoService = require('../services/videoService');
+const renderService = require('../services/renderService');
+
+let active = 0;
+let timer = null;
+
+async function processJob({ id: jobId, video_id: videoId }) {
+  const video = videoService.getVideoRow(videoId);
+  const template = videoService.getTemplate(video.template_id);
+  logger.info(`Job ${jobId} iniciado (vídeo ${videoId}, ${video.quality} ${video.aspect})`);
+
+  let lastWrite = 0;
+  const ctx = {
+    // Limita escritas no banco a ~4 por segundo
+    update: (progress, stage) => {
+      const now = Date.now();
+      if (progress < 100 && now - lastWrite < 250) return;
+      lastWrite = now;
+      videoService.updateJob(jobId, { progress, stage });
+    },
+    log: (msg) => { logger.info(`Job ${jobId}: ${msg}`); videoService.appendJobLog(jobId, msg); },
+  };
+
+  try {
+    const result = await renderService.renderVideo(video, template.config, ctx);
+    videoService.completeJob(jobId, videoId, result);
+    logger.info(`Job ${jobId} concluído`);
+  } catch (err) {
+    logger.error(`Job ${jobId} falhou:`, err.message);
+    videoService.failJob(jobId, videoId, err.message);
+  }
+}
+
+/** Preenche os "slots" livres com jobs da fila. */
+function tick() {
+  while (active < config.MAX_CONCURRENT_JOBS) {
+    const job = videoService.claimNextJob();
+    if (!job) break;
+    active++;
+    processJob(job)
+      .catch((err) => logger.error('Erro inesperado no worker:', err))
+      .finally(() => { active--; tick(); });
+  }
+}
+
+function start() {
+  const requeued = videoService.requeueStuckJobs();
+  if (requeued) logger.warn(`${requeued} job(s) interrompido(s) voltaram para a fila.`);
+  timer = setInterval(tick, config.WORKER_POLL_MS);
+  tick();
+  logger.info(`Worker ativo (até ${config.MAX_CONCURRENT_JOBS} jobs em paralelo)`);
+}
+
+const stop = () => { if (timer) clearInterval(timer); };
+const wake = () => setImmediate(tick); // chamado quando entra um job novo
+
+module.exports = { start, stop, wake };
