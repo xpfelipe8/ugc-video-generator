@@ -1,0 +1,78 @@
+# UGC Video Generator
+
+## O que é
+Sistema simples para gerar vídeos UGC em alta qualidade usando:
+- Node.js + Express
+- SQLite
+- FFmpeg
+- HTML + JavaScript puro
+- Prompt/roteiro de vídeo
+- Exportação em 720p / 1080p / 4K
+
+## Como usar
+
+### 1) Instalar Node.js
+Baixe em: https://nodejs.org
+
+### 2) Instalar FFmpeg
+- Windows: https://www.ffmpeg.org/download.html
+- Mac: `brew install ffmpeg`
+- Linux: `sudo apt install ffmpeg`
+
+### 3) Criar o projeto
+Crie uma pasta chamada `ugc-video-generator` e coloque os arquivos do Claude dentro.
+
+### 4) Instalar dependências
+```bash
+npm install
+```
+
+### 5) Configurar ambiente
+Copie `.env.example` para `.env`.
+
+### 6) Rodar o projeto
+```bash
+npm start
+```
+
+Acesse:
+- http://localhost:5000
+
+## Estrutura sugerida
+```bash
+ugc-video-generator/
+├── server.js
+├── package.json
+├── .env.example
+├── .env
+├── public/
+│   ├── index.html
+│   ├── css/
+│   └── js/
+├── src/
+│   ├── config.js
+│   ├── database.js
+│   ├── routes/
+│   ├── controllers/
+│   ├── services/
+│   └── workers/
+├── voices/
+│   └── voices.json
+├── README.md
+└── start.sh
+```
+
+## Funcionalidades previstas
+- Criar vídeo por prompt
+- Escolher template
+- Escolher qualidade
+- Gerar voz em PT-BR
+- Processar com FFmpeg
+- Salvar vídeos em pasta local
+- Exibir histórico de vídeos
+
+## Importante
+Este repositório serve como base para você usar com Claude e gerar o projeto completo. Ele não gera vídeos sozinho sem o sistema final funcionando.
+
+## Próximo passo
+Copie e cole o prompt em `PROMPT_PARA_CLAUDE.md` no Claude e ele vai gerar todos os arquivos do projeto.

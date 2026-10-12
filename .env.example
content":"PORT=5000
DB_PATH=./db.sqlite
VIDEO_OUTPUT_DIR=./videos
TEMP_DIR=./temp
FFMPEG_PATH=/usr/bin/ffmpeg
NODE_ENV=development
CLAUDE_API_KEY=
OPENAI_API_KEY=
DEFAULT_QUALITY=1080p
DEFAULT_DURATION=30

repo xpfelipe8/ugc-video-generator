@@ -1,0 +1,26 @@
+# Guia rápido para usar o Claude
+
+## Objetivo
+Gerar um projeto funcional para vídeos UGC em PT-BR.
+
+## Passos
+1. Abra o Claude
+2. Copie e cole o prompt em `PROMPT_PARA_CLAUDE.md`
+3. Peça: `crie os arquivos do projeto`
+4. Copie cada arquivo que ele gerar
+5. Salve na pasta do projeto local
+6. Rode:
+
+```bash
+npm install
+npm start
+```
+
+## Se o projeto falhar
+Peça ao Claude:
+- `corrija a estrutura para Node.js + SQLite + FFmpeg`
+- `use porta 5000`
+- `simplifique para funcionar localmente`
+
+## Importante
+Não existe um repositório real que reproduza exatamente o Higgsfield, porque é um produto proprietário. O que você pode criar é uma base funcional para uso comercial e para geração de vídeos digitais.
