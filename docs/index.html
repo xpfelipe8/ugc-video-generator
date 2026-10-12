@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gerador de Vídeos UGC</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>🎬 Gerador de Vídeos UGC</h1>
+    <nav><a href="/" class="active">Criar</a><a href="/dashboard.html">Histórico</a></nav>
+  </header>
+
+  <main class="grid-2">
+    <!-- Formulário de criação -->
+    <section class="card">
+      <h2>Novo vídeo</h2>
+      <form id="createForm" autocomplete="off">
+        <label for="title">Título</label>
+        <input type="text" id="title" maxlength="120" required placeholder="Ex.: Garrafa Térmica Pro">
+
+        <label for="template">Template</label>
+        <select id="template"></select>
+
+        <label for="script">Roteiro / descrição</label>
+        <textarea id="script" required minlength="10" placeholder="Escreva o roteiro. Cada frase vira uma cena do vídeo."></textarea>
+        <div class="hint"><span id="counter">0/5000</span></div>
+
+        <div class="row">
+          <div><label for="quality">Qualidade</label><select id="quality"></select></div>
+          <div><label for="aspect">Proporção</label><select id="aspect"></select></div>
+        </div>
+
+        <label class="check"><input type="checkbox" id="useAI" checked> Dividir roteiro com IA</label>
+        <div class="hint" id="aiHint"></div>
+        <label class="check"><input type="checkbox" id="useVoice"> Narração por voz (TTS)</label>
+        <div class="hint" id="voiceHint"></div>
+
+        <button type="submit" id="submitBtn" class="full">Gerar vídeo</button>
+      </form>
+    </section>
+
+    <!-- Progresso + galeria -->
+    <section>
+      <div class="card" style="margin-bottom:24px">
+        <h2>Em andamento</h2>
+        <div id="activeJobs"><div class="hint" id="noJobs">Os vídeos em processamento aparecem aqui com o progresso em tempo real.</div></div>
+      </div>
+      <div class="card">
+        <h2>Galeria</h2>
+        <div class="gallery" id="gallery"><div class="empty">Carregando…</div></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" role="status"></div>
+  <script src="/js/utils.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/main.js"></script>
+</body>
+</html>
