@@ -1,0 +1,17 @@
+'use strict';
+/** routes/status.js — GET /api/status/:jobId (progresso em tempo real via polling) */
+const express = require('express');
+const videoService = require('../services/videoService');
+const { isUuid } = require('../controllers/videoController');
+
+const router = express.Router();
+
+router.get('/:jobId', (req, res) => {
+  if (!isUuid(req.params.jobId)) return res.status(400).json({ error: 'ID inválido.' });
+  const job = videoService.getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job não encontrado.' });
+  const video = videoService.getVideo(job.videoId);
+  res.json({ ...job, downloadUrl: video?.downloadUrl || null, streamUrl: video?.streamUrl || null });
+});
+
+module.exports = router;
