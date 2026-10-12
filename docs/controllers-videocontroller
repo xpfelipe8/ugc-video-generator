@@ -1,0 +1,79 @@
+'use strict';
+/** videoController.js — Validação das entradas e respostas HTTP dos vídeos. */
+const fs = require('fs');
+const config = require('../config');
+const logger = require('../logger');
+const videoService = require('../services/videoService');
+const worker = require('../workers/videoWorker');
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v);
+const bool = (v, def) => (v === undefined ? def : v === true || v === 'true' || v === 1 || v === '1');
+
+const badRequest = (res, message) => res.status(400).json({ error: message });
+
+/** POST /api/videos/create */
+exports.create = (req, res) => {
+  const b = req.body || {};
+  const title = String(b.title || '').trim();
+  // Remove caracteres de controle (exceto quebra de linha) do roteiro
+  const script = String(b.script || '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim();
+  const template = String(b.template || 'product_showcase');
+  const quality = String(b.quality || '1080p');
+  const aspect = String(b.aspect || '9:16');
+
+  if (!title) return badRequest(res, 'Informe um título.');
+  if (title.length > config.MAX_TITLE_CHARS) return badRequest(res, `Título deve ter no máximo ${config.MAX_TITLE_CHARS} caracteres.`);
+  if (script.length < config.MIN_SCRIPT_CHARS) return badRequest(res, `Roteiro muito curto (mínimo ${config.MIN_SCRIPT_CHARS} caracteres).`);
+  if (script.length > config.MAX_SCRIPT_CHARS) return badRequest(res, `Roteiro muito longo (máximo ${config.MAX_SCRIPT_CHARS} caracteres).`);
+  if (!videoService.getTemplate(template)) return badRequest(res, 'Template inválido.');
+  if (!config.QUALITIES[quality]) return badRequest(res, `Qualidade inválida. Use: ${Object.keys(config.QUALITIES).join(', ')}.`);
+  if (!config.ASPECTS.includes(aspect)) return badRequest(res, `Proporção inválida. Use: ${config.ASPECTS.join(', ')}.`);
+
+  const { video, job } = videoService.createVideo({
+    title, script, template, quality, aspect,
+    useAI: bool(b.useAI, true),
+    useVoice: bool(b.useVoice, false),
+  });
+  logger.info(`Vídeo ${video.id} criado (template ${template}, ${quality}, ${aspect})`);
+  worker.wake();
+  res.status(202).json({ video, job });
+};
+
+/** GET /api/videos/list?page=1&limit=20&status=completed */
+exports.list = (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+  const status = ['queued', 'processing', 'completed', 'failed'].includes(req.query.status) ? req.query.status : undefined;
+  res.json({ ...videoService.listVideos({ page, limit, status }), stats: videoService.getStats() });
+};
+
+/** GET /api/videos/:id */
+exports.get = (req, res) => {
+  if (!isUuid(req.params.id)) return badRequest(res, 'ID inválido.');
+  const video = videoService.getVideo(req.params.id);
+  if (!video) return res.status(404).json({ error: 'Vídeo não encontrado.' });
+  res.json({ video });
+};
+
+/** GET /api/videos/:id/download  (use ?inline=1 para reproduzir no navegador) */
+exports.download = (req, res) => {
+  if (!isUuid(req.params.id)) return badRequest(res, 'ID inválido.');
+  const row = videoService.getVideoRow(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Vídeo não encontrado.' });
+  if (row.status !== 'completed' || !row.file_path || !fs.existsSync(row.file_path)) {
+    return res.status(409).json({ error: 'O vídeo ainda não está pronto.' });
+  }
+  if (req.query.inline) return res.type('video/mp4').sendFile(row.file_path); // suporta Range (seek)
+  const safeName = row.title.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') || 'video';
+  res.download(row.file_path, `${safeName}.mp4`);
+};
+
+/** DELETE /api/videos/:id */
+exports.remove = (req, res) => {
+  if (!isUuid(req.params.id)) return badRequest(res, 'ID inválido.');
+  if (!videoService.deleteVideo(req.params.id)) return res.status(404).json({ error: 'Vídeo não encontrado.' });
+  res.json({ ok: true });
+};
+
+exports.isUuid = isUuid;
