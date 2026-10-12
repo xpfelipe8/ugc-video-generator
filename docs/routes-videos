@@ -1,0 +1,24 @@
+'use strict';
+/** routes/videos.js — Rotas /api/videos */
+const express = require('express');
+const rateLimit = require('express-rate-limit');
+const controller = require('../controllers/videoController');
+
+const router = express.Router();
+
+// Evita abuso: no máximo 20 criações por minuto por IP
+const createLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas requisições. Aguarde um minuto.' },
+});
+
+router.post('/create', createLimiter, controller.create);
+router.get('/list', controller.list); // precisa vir antes de /:id
+router.get('/:id', controller.get);
+router.get('/:id/download', controller.download);
+router.delete('/:id', controller.remove);
+
+module.exports = router;
