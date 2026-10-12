@@ -1,0 +1,138 @@
+'use strict';
+/**
+ * database.js — Inicializa o SQLite (arquivo único, sem servidor),
+ * cria as tabelas e carrega os templates pré-configurados.
+ */
+const Database = require('better-sqlite3');
+const config = require('./config');
+const logger = require('./logger');
+
+const db = new Database(config.DB_PATH);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    email      TEXT UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS templates (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL,
+    config      TEXT NOT NULL            -- JSON com cores, efeito, posição do texto
+  );
+
+  CREATE TABLE IF NOT EXISTS videos (
+    id           TEXT PRIMARY KEY,       -- UUID
+    user_id      INTEGER NOT NULL DEFAULT 1 REFERENCES users(id),
+    title        TEXT NOT NULL,
+    script       TEXT NOT NULL,
+    template_id  TEXT NOT NULL REFERENCES templates(id),
+    quality      TEXT NOT NULL,
+    aspect       TEXT NOT NULL,
+    use_ai       INTEGER NOT NULL DEFAULT 1,
+    use_voice    INTEGER NOT NULL DEFAULT 0,
+    status       TEXT NOT NULL DEFAULT 'queued',  -- queued | processing | completed | failed
+    file_path    TEXT,
+    duration_sec REAL,
+    file_size    INTEGER,
+    width        INTEGER,
+    height       INTEGER,
+    error        TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS jobs (
+    id          TEXT PRIMARY KEY,        -- UUID
+    video_id    TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    status      TEXT NOT NULL DEFAULT 'queued',
+    stage       TEXT NOT NULL DEFAULT 'Na fila',
+    progress    INTEGER NOT NULL DEFAULT 0,       -- 0 a 100
+    error       TEXT,
+    log         TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at  TEXT,
+    finished_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_videos_created ON videos(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
+`);
+
+// Usuário padrão (o projeto não exige login por padrão)
+db.prepare(`INSERT OR IGNORE INTO users (id, name, email) VALUES (1, 'Padrão', NULL)`).run();
+
+/**
+ * Templates pré-configurados.
+ *  - colors: gradiente de fundo
+ *  - effect: zoom_in | zoom_out | pan_left | pan_right
+ *  - textPosition: center | lower
+ *  - aiStyle: instrução usada pela IA ao dividir o roteiro em cenas
+ */
+const TEMPLATES = [
+  {
+    id: 'product_showcase',
+    name: 'Product Showcase',
+    description: 'Apresenta o produto com destaque para benefícios',
+    config: { colors: ['#0f2027', '#2c5364'], accent: '#ffd166', effect: 'zoom_in', textPosition: 'center', aiStyle: 'Apresente o produto, destacando um benefício por cena e terminando com chamada para ação.' },
+  },
+  {
+    id: 'unboxing',
+    name: 'Unboxing',
+    description: 'Clima de expectativa ao desempacotar',
+    config: { colors: ['#4a148c', '#e91e63'], accent: '#fff176', effect: 'pan_right', textPosition: 'lower', aiStyle: 'Conte a experiência de abrir o produto, com expectativa, descoberta e reação final.' },
+  },
+  {
+    id: 'review',
+    name: 'Review',
+    description: 'Opinião honesta com prós e contras',
+    config: { colors: ['#0b3d2e', '#1b8a5a'], accent: '#b9fbc0', effect: 'zoom_in', textPosition: 'center', aiStyle: 'Faça uma avaliação honesta: primeira impressão, pontos fortes, ponto fraco e veredito.' },
+  },
+  {
+    id: 'tutorial',
+    name: 'Tutorial',
+    description: 'Passo a passo explicando o uso',
+    config: { colors: ['#1a237e', '#00acc1'], accent: '#a7ffeb', effect: 'pan_left', textPosition: 'lower', aiStyle: 'Explique como usar em passos numerados curtos, um passo por cena.' },
+  },
+  {
+    id: 'comparison',
+    name: 'Comparison',
+    description: 'Compara produtos lado a lado',
+    config: { colors: ['#37474f', '#ff7043'], accent: '#ffe0b2', effect: 'zoom_out', textPosition: 'center', aiStyle: 'Compare as opções critério por critério e conclua qual vence e por quê.' },
+  },
+  {
+    id: 'testimonial',
+    name: 'Testimonial',
+    description: 'Depoimento em primeira pessoa',
+    config: { colors: ['#3e2723', '#d4a373'], accent: '#fefae0', effect: 'zoom_out', textPosition: 'center', aiStyle: 'Escreva como depoimento em primeira pessoa: problema antes, descoberta, resultado depois.' },
+  },
+  {
+    id: 'lifestyle',
+    name: 'Lifestyle',
+    description: 'Conteúdo leve de rotina e estilo de vida',
+    config: { colors: ['#ff9966', '#ff5e62'], accent: '#ffffff', effect: 'pan_right', textPosition: 'lower', aiStyle: 'Mostre o produto inserido naturalmente na rotina do dia a dia, tom leve e espontâneo.' },
+  },
+  {
+    id: 'demo',
+    name: 'Demo',
+    description: 'Demonstração direta de funcionalidades',
+    config: { colors: ['#000428', '#004e92'], accent: '#80d8ff', effect: 'zoom_in', textPosition: 'lower', aiStyle: 'Demonstre as funcionalidades principais de forma direta, uma por cena.' },
+  },
+];
+
+const upsert = db.prepare(
+  `INSERT INTO templates (id, name, description, config) VALUES (@id, @name, @description, @config)
+   ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, config = excluded.config`
+);
+db.transaction(() => {
+  for (const t of TEMPLATES) upsert.run({ id: t.id, name: t.name, description: t.description, config: JSON.stringify(t.config) });
+})();
+
+logger.info(`Banco de dados pronto em ${config.DB_PATH}`);
+
+module.exports = db;
