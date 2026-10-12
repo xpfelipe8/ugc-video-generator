@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Histórico — Gerador de Vídeos UGC</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>🎬 Gerador de Vídeos UGC</h1>
+    <nav><a href="/">Criar</a><a href="/dashboard.html" class="active">Histórico</a></nav>
+  </header>
+
+  <main>
+    <div class="stats">
+      <div class="stat"><b id="sTotal">0</b><span>Total de vídeos</span></div>
+      <div class="stat"><b id="sDone">0</b><span>Concluídos</span></div>
+      <div class="stat"><b id="sActive">0</b><span>Em andamento</span></div>
+      <div class="stat"><b id="sFailed">0</b><span>Com falha</span></div>
+      <div class="stat"><b id="sDuration">—</b><span>Duração total</span></div>
+      <div class="stat"><b id="sSize">—</b><span>Espaço usado</span></div>
+    </div>
+
+    <section class="card">
+      <h2>Histórico de gerações</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Título</th><th>Template</th><th>Formato</th><th>Status</th><th>Duração</th><th>Tamanho</th><th>Criado em</th><th></th></tr></thead>
+          <tbody id="historyBody"><tr><td colspan="8" class="empty">Carregando…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" role="status"></div>
+  <script src="/js/utils.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/main.js"></script>
+</body>
+</html>
