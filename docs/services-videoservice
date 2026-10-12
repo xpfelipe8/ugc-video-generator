@@ -1,0 +1,160 @@
+'use strict';
+/**
+ * videoService.js — Acesso ao banco para vídeos, jobs e templates.
+ */
+const crypto = require('crypto');
+const fs = require('fs');
+const db = require('../database');
+
+const toApiVideo = (v) => v && {
+  id: v.id,
+  title: v.title,
+  script: v.script,
+  template: v.template_id,
+  quality: v.quality,
+  aspect: v.aspect,
+  useAI: Boolean(v.use_ai),
+  useVoice: Boolean(v.use_voice),
+  status: v.status,
+  durationSec: v.duration_sec,
+  fileSize: v.file_size,
+  width: v.width,
+  height: v.height,
+  error: v.error,
+  createdAt: v.created_at,
+  completedAt: v.completed_at,
+  jobId: v.job_id || undefined,
+  progress: v.progress ?? undefined,
+  downloadUrl: v.status === 'completed' ? `/api/videos/${v.id}/download` : null,
+  streamUrl: v.status === 'completed' ? `/api/videos/${v.id}/download?inline=1` : null,
+};
+
+const toApiJob = (j) => j && {
+  jobId: j.id,
+  videoId: j.video_id,
+  status: j.status,
+  stage: j.stage,
+  progress: j.progress,
+  error: j.error,
+  log: j.log ? j.log.split('\n').filter(Boolean) : [],
+  createdAt: j.created_at,
+  startedAt: j.started_at,
+  finishedAt: j.finished_at,
+};
+
+function getTemplates() {
+  return db.prepare('SELECT * FROM templates ORDER BY rowid').all()
+    .map((t) => ({ id: t.id, name: t.name, description: t.description, config: JSON.parse(t.config) }));
+}
+
+function getTemplate(id) {
+  const t = db.prepare('SELECT * FROM templates WHERE id = ?').get(id);
+  return t && { id: t.id, name: t.name, description: t.description, config: JSON.parse(t.config) };
+}
+
+/** Cria vídeo + job na mesma transação. */
+function createVideo({ title, script, template, quality, aspect, useAI, useVoice }) {
+  const videoId = crypto.randomUUID();
+  const jobId = crypto.randomUUID();
+  db.transaction(() => {
+    db.prepare(`INSERT INTO videos (id, title, script, template_id, quality, aspect, use_ai, use_voice)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(videoId, title, script, template, quality, aspect, useAI ? 1 : 0, useVoice ? 1 : 0);
+    db.prepare('INSERT INTO jobs (id, video_id) VALUES (?, ?)').run(jobId, videoId);
+  })();
+  return { video: getVideo(videoId), job: getJob(jobId) };
+}
+
+const VIDEO_LIST_SQL = `
+  SELECT v.*, j.id AS job_id, j.progress AS progress
+  FROM videos v LEFT JOIN jobs j ON j.video_id = v.id`;
+
+function getVideo(id) {
+  return toApiVideo(db.prepare(`${VIDEO_LIST_SQL} WHERE v.id = ?`).get(id));
+}
+
+function getVideoRow(id) {
+  return db.prepare('SELECT * FROM videos WHERE id = ?').get(id);
+}
+
+function listVideos({ page = 1, limit = 20, status } = {}) {
+  const where = status ? 'WHERE v.status = ?' : '';
+  const params = status ? [status] : [];
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM videos v ${where}`).get(...params).n;
+  const rows = db.prepare(`${VIDEO_LIST_SQL} ${where} ORDER BY v.created_at DESC, v.rowid DESC LIMIT ? OFFSET ?`)
+    .all(...params, limit, (page - 1) * limit);
+  return { videos: rows.map(toApiVideo), total, page, limit };
+}
+
+function getStats() {
+  const r = db.prepare(`
+    SELECT COUNT(*) AS total,
+           SUM(status = 'completed') AS completed,
+           SUM(status IN ('queued','processing')) AS active,
+           SUM(status = 'failed') AS failed,
+           COALESCE(SUM(file_size), 0) AS bytes,
+           COALESCE(SUM(duration_sec), 0) AS seconds
+    FROM videos`).get();
+  return { total: r.total, completed: r.completed || 0, active: r.active || 0, failed: r.failed || 0, bytes: r.bytes, seconds: r.seconds };
+}
+
+function deleteVideo(id) {
+  const row = getVideoRow(id);
+  if (!row) return false;
+  if (row.status === 'processing') throw Object.assign(new Error('Vídeo em processamento não pode ser removido'), { status: 409 });
+  if (row.file_path) fs.rm(row.file_path, { force: true }, () => {});
+  db.prepare('DELETE FROM videos WHERE id = ?').run(id);
+  return true;
+}
+
+const getJobRow = (id) => db.prepare('SELECT * FROM jobs WHERE id = ?').get(id);
+const getJob = (id) => toApiJob(getJobRow(id));
+
+function updateJob(id, { progress, stage }) {
+  db.prepare('UPDATE jobs SET progress = ?, stage = ? WHERE id = ?').run(Math.max(0, Math.min(100, Math.round(progress))), stage, id);
+}
+
+function appendJobLog(id, message) {
+  const row = getJobRow(id);
+  if (!row) return;
+  const lines = (row.log ? row.log.split('\n') : []).concat(message).slice(-50);
+  db.prepare('UPDATE jobs SET log = ? WHERE id = ?').run(lines.join('\n'), id);
+}
+
+/** Pega o próximo job da fila e o marca como "processing" (atômico). */
+function claimNextJob() {
+  const row = db.prepare(`SELECT id, video_id FROM jobs WHERE status = 'queued' ORDER BY created_at, rowid LIMIT 1`).get();
+  if (!row) return null;
+  const res = db.prepare(`UPDATE jobs SET status = 'processing', stage = 'Iniciando', started_at = datetime('now') WHERE id = ? AND status = 'queued'`).run(row.id);
+  if (res.changes !== 1) return null;
+  db.prepare(`UPDATE videos SET status = 'processing' WHERE id = ?`).run(row.video_id);
+  return row;
+}
+
+function completeJob(jobId, videoId, r) {
+  db.transaction(() => {
+    db.prepare(`UPDATE jobs SET status = 'completed', progress = 100, stage = 'Concluído', finished_at = datetime('now') WHERE id = ?`).run(jobId);
+    db.prepare(`UPDATE videos SET status = 'completed', file_path = ?, duration_sec = ?, file_size = ?, width = ?, height = ?, error = NULL, completed_at = datetime('now') WHERE id = ?`)
+      .run(r.filePath, r.duration, r.size, r.width, r.height, videoId);
+  })();
+}
+
+function failJob(jobId, videoId, message) {
+  const msg = String(message).slice(0, 1000);
+  db.transaction(() => {
+    db.prepare(`UPDATE jobs SET status = 'failed', stage = 'Falhou', error = ?, finished_at = datetime('now') WHERE id = ?`).run(msg, jobId);
+    db.prepare(`UPDATE videos SET status = 'failed', error = ? WHERE id = ?`).run(msg, videoId);
+  })();
+}
+
+/** Jobs que ficaram "processing" por queda do servidor voltam para a fila. */
+function requeueStuckJobs() {
+  const r = db.prepare(`UPDATE jobs SET status = 'queued', stage = 'Na fila', progress = 0 WHERE status = 'processing'`).run();
+  db.prepare(`UPDATE videos SET status = 'queued' WHERE status = 'processing'`).run();
+  return r.changes;
+}
+
+module.exports = {
+  getTemplates, getTemplate, createVideo, getVideo, getVideoRow, listVideos, getStats, deleteVideo,
+  getJob, updateJob, appendJobLog, claimNextJob, completeJob, failJob, requeueStuckJobs,
+};
