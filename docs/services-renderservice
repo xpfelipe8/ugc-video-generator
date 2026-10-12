@@ -1,0 +1,77 @@
+'use strict';
+/**
+ * renderService.js — Orquestra a geração completa de um vídeo:
+ * cenas (IA) → narração (opcional) → clipes FFmpeg → concatenação.
+ */
+const fs = require('fs');
+const path = require('path');
+const config = require('../config');
+const ai = require('./aiService');
+const ffmpeg = require('./ffmpegService');
+
+/** Estimativa de duração sem áudio: ~2,6 palavras/seg + respiro. */
+const estimateDuration = (text) => Math.max(2.5, text.split(/\s+/).length / 2.6 + 0.8);
+
+/**
+ * @param {object} video  linha da tabela videos
+ * @param {object} template  config do template (JSON já parseado)
+ * @param {{update:(progress:number, stage:string)=>void, log:(msg:string)=>void}} ctx
+ */
+async function renderVideo(video, template, ctx) {
+  const { width, height } = config.getResolution(video.quality, video.aspect);
+  const tmpDir = fs.mkdtempSync(path.join(config.TMP_DIR, 'job-'));
+
+  try {
+    // 1) Cenas
+    ctx.update(3, 'Dividindo roteiro em cenas');
+    const scenes = await ai.buildScenes(video.script, template, Boolean(video.use_ai), ctx.log);
+
+    // 2) Narração + duração de cada cena
+    const wantVoice = Boolean(video.use_voice);
+    const voiceOk = wantVoice && ai.hasTTS();
+    if (wantVoice && !voiceOk) ctx.log('Narração solicitada, mas OPENAI_API_KEY não está configurada — vídeo sem voz.');
+
+    for (let i = 0; i < scenes.length; i++) {
+      ctx.update(5 + Math.round((i / scenes.length) * 10), `Preparando cena ${i + 1}/${scenes.length}`);
+      const scene = scenes[i];
+      scene.audioFile = null;
+      if (voiceOk) {
+        try {
+          const file = `voice_${i}.mp3`;
+          await ai.synthesizeSpeech(scene.narration, path.join(tmpDir, file));
+          scene.duration = (await ffmpeg.probeDuration(path.join(tmpDir, file))) + 0.6;
+          scene.audioFile = file;
+        } catch (err) {
+          ctx.log(`Falha na narração da cena ${i + 1} (${err.message}) — cena ficará sem voz.`);
+        }
+      }
+      if (!scene.audioFile) scene.duration = estimateDuration(scene.narration);
+    }
+
+    // 3) Clipes (15% → 93%)
+    const clips = [];
+    for (let i = 0; i < scenes.length; i++) {
+      const s = scenes[i];
+      const clip = await ffmpeg.renderClip({
+        dir: tmpDir, index: i, caption: s.caption, title: video.title, duration: s.duration,
+        width, height, template, audioFile: s.audioFile,
+        onProgress: (f) => ctx.update(15 + Math.round(((i + f) / scenes.length) * 78), `Renderizando cena ${i + 1}/${scenes.length}`),
+      });
+      clips.push(clip);
+    }
+
+    // 4) Junta tudo
+    ctx.update(95, 'Finalizando vídeo');
+    const outFile = path.join(config.OUTPUT_DIR, `${video.id}.mp4`);
+    await ffmpeg.concatClips(tmpDir, clips, outFile);
+
+    const duration = await ffmpeg.probeDuration(outFile);
+    const size = fs.statSync(outFile).size;
+    ctx.log(`Vídeo pronto: ${width}x${height}, ${duration.toFixed(1)}s, ${(size / 1048576).toFixed(1)} MB.`);
+    return { filePath: outFile, duration, size, width, height };
+  } finally {
+    fs.rm(tmpDir, { recursive: true, force: true }, () => {}); // limpa temporários
+  }
+}
+
+module.exports = { renderVideo };
