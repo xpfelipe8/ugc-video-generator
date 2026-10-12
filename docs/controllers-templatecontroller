@@ -1,0 +1,16 @@
+'use strict';
+/** templateController.js — Lista templates e opções disponíveis para o formulário. */
+const config = require('../config');
+const videoService = require('../services/videoService');
+
+exports.list = (req, res) => {
+  res.json({
+    templates: videoService.getTemplates(),
+    options: {
+      qualities: Object.keys(config.QUALITIES),
+      aspects: config.ASPECTS,
+      maxScriptChars: config.MAX_SCRIPT_CHARS,
+      ai: { claude: Boolean(config.ANTHROPIC_API_KEY), openai: Boolean(config.OPENAI_API_KEY) },
+    },
+  });
+};
