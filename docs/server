@@ -1,0 +1,35 @@
+'use strict';
+/**
+ * server.js — Servidor Express principal (porta 5000 por padrão).
+ */
+const express = require('express');
+const helmet = require('helmet');
+const config = require('./config');
+const logger = require('./logger');
+require('./database'); // inicializa o SQLite
+const ffmpegService = require('./services/ffmpegService');
+const worker = require('./workers/videoWorker');
+
+const app = express();
+app.disable('x-powered-by');
+
+// Segurança básica: cabeçalhos HTTP (CSP sem upgrade-insecure-requests para funcionar em http://localhost)
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: { 'upgrade-insecure-requests': null, 'media-src': ["'self'", 'blob:'] },
+  },
+}));
+app.use(express.json({ limit: '100kb' }));
+
+// Log de requisições da API
+app.use('/api', (req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    if (!req.originalUrl.startsWith('/api/status')) logger.info(`${req.method} ${req.originalUrl} → ${res.statusCode} (${Date.now() - start}ms)`);
+  });
+  next();
+});
+
+app.get('/api/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
+app.use('/api/videos',
